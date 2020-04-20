@@ -48,8 +48,11 @@ class StreamSegMetrics(_StreamMetrics):
 
     def _fast_hist(self, label_true, label_pred):
         mask = (label_true >= 0) & (label_true < self.n_classes)
+        # test = self.n_classes * label_true[mask].astype(int) + label_pred[mask]
+        # print(label_true[mask].shape)
         hist = np.bincount(
             self.n_classes * label_true[mask].astype(int) + label_pred[mask],
+            # test,
             minlength=self.n_classes ** 2,
         ).reshape(self.n_classes, self.n_classes)
         return hist

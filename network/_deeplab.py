@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from network.backbone.attention import PAM_Module,CAM_Module,Attention_Module
 
 from .utils import _SimpleSegmentationModel
 
@@ -33,7 +34,8 @@ class DeepLabHeadV3Plus(nn.Module):
             nn.BatchNorm2d(48),
             nn.ReLU(inplace=True),
         )
-
+        self.sa = PAM_Module(in_channels)
+        self.conv_sa = nn.Conv2d(in_channels, in_channels, 3, padding=1, bias=False)
         self.aspp = ASPP(in_channels, aspp_dilate)
 
         self.classifier = nn.Sequential(
@@ -46,7 +48,10 @@ class DeepLabHeadV3Plus(nn.Module):
 
     def forward(self, feature):
         low_level_feature = self.project( feature['low_level'] )
-        output_feature = self.aspp(feature['out'])
+        feature_out = self.sa(feature['out'])
+        feature_out = self.conv_sa(feature_out)
+        output_feature = self.aspp(feature_out)
+        # output_feature = self.aspp(feature['out'])
         output_feature = F.interpolate(output_feature, size=low_level_feature.shape[2:], mode='bilinear', align_corners=False)
         return self.classifier( torch.cat( [ low_level_feature, output_feature ], dim=1 ) )
     
@@ -73,6 +78,76 @@ class DeepLabHead(nn.Module):
 
     def forward(self, feature):
         return self.classifier( feature['out'] )
+
+    def _init_weight(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+class DoubleAttentionHead(nn.Module):
+    def __init__(self, in_channels, num_classes):
+        super(DoubleAttentionHead,self).__init__()
+        self.project = nn.Sequential(
+            nn.Conv2d(in_channels, 256, 1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+        )
+        self.sa = PAM_Module(256)
+        self.sc = CAM_Module(256)
+        self.conv_sa = nn.Conv2d(256, 256, 3, padding=1, bias=False)
+        self.conv_sc = nn.Conv2d(256, 256, 3, padding=1, bias=False)
+
+        self.classifier = nn.Sequential(
+            nn.Conv2d(256, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, num_classes, 1)
+        )
+        self._init_weight()
+
+    def forward(self, feature):
+        output = self.project(feature['out'])
+        output1 = self.sa(output)
+        output1 = self.conv_sa(output1)
+        output2 = self.sc(output)
+        output2 = self.conv_sc(output2)
+        output = (output1 + output2)/2
+        # output = output1
+        # output = output2
+        return self.classifier(output)
+
+    def _init_weight(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+
+class Head(nn.Module):
+    def __init__(self, in_channels, num_classes):
+        super(Head, self).__init__()
+        self.project = nn.Sequential(
+            nn.Conv2d(in_channels, 256, 1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Conv2d(256, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, num_classes, 1)
+        )
+        self._init_weight()
+
+    def forward(self, feature):
+        output = self.project(feature['out'])
+        return self.classifier(output)
 
     def _init_weight(self):
         for m in self.modules():
